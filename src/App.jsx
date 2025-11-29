@@ -95,14 +95,41 @@ const SortIcon = ({ field, sortConfig }) => {
 // ============================================================================
 // DATA FETCHING
 // ============================================================================
-async function fetchMonthlyData() {
-  // Fetch all raw data - increase limit to get all rows (default is 1000)
-  const { data, error } = await supabase
-    .from(CONFIG.TABLE_NAME)
-    .select('application_month, dealer_code, net_incoming, approved, trx_settled, gmv')
-    .limit(10000); // Increase limit to fetch all data
+async function fetchAllData(tableName, selectColumns) {
+  // Fetch ALL data using pagination (Supabase has 1000 row default limit)
+  const allData = [];
+  const pageSize = 1000;
+  let offset = 0;
+  let hasMore = true;
   
-  if (error) throw error;
+  while (hasMore) {
+    const { data, error } = await supabase
+      .from(tableName)
+      .select(selectColumns)
+      .range(offset, offset + pageSize - 1);
+    
+    if (error) throw error;
+    
+    if (data && data.length > 0) {
+      allData.push(...data);
+      offset += pageSize;
+      hasMore = data.length === pageSize;
+    } else {
+      hasMore = false;
+    }
+  }
+  
+  return allData;
+}
+
+async function fetchMonthlyData() {
+  // Fetch all raw data using pagination
+  const data = await fetchAllData(
+    CONFIG.TABLE_NAME, 
+    'application_month, dealer_code, net_incoming, approved, trx_settled, gmv'
+  );
+  
+  console.log(`Fetched ${data.length} rows from ${CONFIG.TABLE_NAME}`); // Debug log
   
   // Calculate # Stores w/ SF+ (unique stores with incoming in the whole year)
   const storesWithSFYTD = new Set();
@@ -173,13 +200,10 @@ async function fetchMonthlyData() {
 }
 
 async function fetchStoreData() {
-  const { data, error } = await supabase
-    .from(CONFIG.TABLE_NAME)
-    .select('dealer_code, submerchant')
-    .limit(10000) // Increase limit to fetch all data
-    .order('dealer_code');
-  
-  if (error) throw error;
+  const data = await fetchAllData(
+    CONFIG.TABLE_NAME,
+    'dealer_code, submerchant'
+  );
   
   // Get unique stores
   const storeMap = {};
