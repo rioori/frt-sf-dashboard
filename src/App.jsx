@@ -29,6 +29,7 @@ const CONFIG = {
   MERCHANT_NAME: "FRT",
   MERCHANT_FULL_NAME: "FPT Retail",
   TABLE_NAME: "KVVN_SF_FRT_Store_Level",
+  TOTAL_STORES: 625, // Fixed total number of FRT stores
   AUTO_REFRESH_INTERVAL: 5 * 60 * 1000, // 5 minutes
   THRESHOLDS: {
     approval: [60, 50],
@@ -95,11 +96,21 @@ const SortIcon = ({ field, sortConfig }) => {
 // DATA FETCHING
 // ============================================================================
 async function fetchMonthlyData() {
+  // Fetch all raw data
   const { data, error } = await supabase
     .from(CONFIG.TABLE_NAME)
     .select('application_month, dealer_code, net_incoming, approved, trx_settled, gmv');
   
   if (error) throw error;
+  
+  // Calculate # Stores w/ SF+ (unique stores with incoming in the whole year)
+  const storesWithSFYTD = new Set();
+  data.forEach(row => {
+    if (row.net_incoming > 0) {
+      storesWithSFYTD.add(row.dealer_code);
+    }
+  });
+  const storesWithSFCount = storesWithSFYTD.size;
   
   // Group by month
   const monthlyMap = {};
@@ -112,7 +123,6 @@ async function fetchMonthlyData() {
     if (!monthlyMap[month]) {
       monthlyMap[month] = {
         month,
-        totalStores: new Set(),
         storesWithIncoming: new Set(),
         storesWithTrx: new Set(),
         incoming: 0,
@@ -122,7 +132,6 @@ async function fetchMonthlyData() {
       };
     }
     
-    monthlyMap[month].totalStores.add(row.dealer_code);
     if (row.net_incoming > 0) monthlyMap[month].storesWithIncoming.add(row.dealer_code);
     if (row.trx_settled > 0) monthlyMap[month].storesWithTrx.add(row.dealer_code);
     monthlyMap[month].incoming += row.net_incoming || 0;
@@ -142,16 +151,16 @@ async function fetchMonthlyData() {
     };
   });
   
-  // Convert to arrays
+  // Convert to arrays with correct logic
   const monthlyData = Object.values(monthlyMap)
     .map(m => ({
       month: m.month,
       label: new Date(m.month + '-01').toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
       quarter: `Q${Math.ceil((new Date(m.month + '-01').getMonth() + 1) / 3)}`,
-      totalStores: m.totalStores.size,
-      storesWithSF: m.totalStores.size,
-      storesWithIncoming: m.storesWithIncoming.size,
-      storesWithTrx: m.storesWithTrx.size,
+      totalStores: CONFIG.TOTAL_STORES, // Fixed: 625
+      storesWithSF: storesWithSFCount, // Fixed: unique stores with incoming in year
+      storesWithIncoming: m.storesWithIncoming.size, // Monthly: stores with incoming > 0
+      storesWithTrx: m.storesWithTrx.size, // Monthly: stores with trx > 0
       incoming: m.incoming,
       approved: m.approved,
       trx: m.trx,
@@ -159,7 +168,7 @@ async function fetchMonthlyData() {
     }))
     .sort((a, b) => a.month.localeCompare(b.month));
   
-  return { monthlyData, storeMonthlyData };
+  return { monthlyData, storeMonthlyData, storesWithSFCount };
 }
 
 async function fetchStoreData() {
@@ -204,7 +213,7 @@ export default function FRTDashboard() {
     setError(null);
     
     try {
-      const [{ monthlyData: monthly, storeMonthlyData: storeMonthly }, stores] = await Promise.all([
+      const [{ monthlyData: monthly, storeMonthlyData: storeMonthly, storesWithSFCount }, stores] = await Promise.all([
         fetchMonthlyData(),
         fetchStoreData()
       ]);
@@ -254,8 +263,8 @@ export default function FRTDashboard() {
         approved: qMonths.reduce((s, m) => s + m.approved, 0),
         trx: qMonths.reduce((s, m) => s + m.trx, 0),
         gmv: qMonths.reduce((s, m) => s + m.gmv, 0),
-        totalStores: lastMonth.totalStores,
-        storesWithSF: lastMonth.storesWithSF,
+        totalStores: CONFIG.TOTAL_STORES,
+        storesWithSF: lastMonth.storesWithSF, // Same for all months (YTD unique)
         storesWithIncoming: Math.round(qMonths.reduce((s, m) => s + m.storesWithIncoming, 0) / qMonths.length),
         storesWithTrx: Math.round(qMonths.reduce((s, m) => s + m.storesWithTrx, 0) / qMonths.length),
       };
@@ -440,20 +449,19 @@ export default function FRTDashboard() {
                   </tr>
                   <tr className="border-t border-white/5 hover:bg-white/5">
                     <td className="p-2 sticky left-0 bg-slate-900/90 backdrop-blur text-slate-300"># Stores</td>
-                    <td className="p-2 text-center font-semibold text-white bg-cyan-500/5">{latestMonth?.totalStores || '-'}</td>
+                    <td className="p-2 text-center font-semibold text-white bg-cyan-500/5">{CONFIG.TOTAL_STORES}</td>
                     {quarterlyData.map((q, idx) => (
                       <td key={q.quarter} className="p-2 text-center text-slate-300 border-l border-white/5">
-                        {q.totalStores}
-                        <TrendIcon current={q.totalStores} previous={quarterlyData[idx-1]?.totalStores} className="inline ml-1" />
+                        {CONFIG.TOTAL_STORES}
                       </td>
                     ))}
                   </tr>
                   <tr className="border-t border-white/5 hover:bg-white/5">
                     <td className="p-2 sticky left-0 bg-slate-900/90 backdrop-blur text-slate-300"># Stores w/ SF+</td>
-                    <td className="p-2 text-center font-semibold text-white bg-cyan-500/5">{latestMonth?.storesWithSF || '-'} <span className="text-slate-500 text-[9px]">(100%)</span></td>
+                    <td className="p-2 text-center font-semibold text-white bg-cyan-500/5">{latestMonth?.storesWithSF || '-'} <span className="text-slate-500 text-[9px]">({((latestMonth?.storesWithSF / CONFIG.TOTAL_STORES) * 100).toFixed(0)}%)</span></td>
                     {quarterlyData.map((q) => (
                       <td key={q.quarter} className="p-2 text-center text-slate-300 border-l border-white/5">
-                        {q.storesWithSF} <span className="text-slate-500 text-[9px]">(100%)</span>
+                        {q.storesWithSF} <span className="text-slate-500 text-[9px]">({((q.storesWithSF / CONFIG.TOTAL_STORES) * 100).toFixed(0)}%)</span>
                       </td>
                     ))}
                   </tr>
@@ -462,7 +470,7 @@ export default function FRTDashboard() {
                     <td className="p-2 text-center text-slate-300 bg-cyan-500/5">-</td>
                     {quarterlyData.map((q) => (
                       <td key={q.quarter} className="p-2 text-center text-slate-300 border-l border-white/5">
-                        {q.storesWithIncoming} <span className="text-slate-500 text-[9px]">({((q.storesWithIncoming/q.totalStores)*100).toFixed(0)}%)</span>
+                        {q.storesWithIncoming} <span className="text-slate-500 text-[9px]">({((q.storesWithIncoming / CONFIG.TOTAL_STORES) * 100).toFixed(0)}%)</span>
                       </td>
                     ))}
                   </tr>
@@ -481,7 +489,7 @@ export default function FRTDashboard() {
                     <td className="p-2 text-center bg-cyan-500/5">-</td>
                     {quarterlyData.map(q => (
                       <td key={q.quarter} className="p-2 text-center border-l border-white/5">
-                        <RateBadge value={(q.storesWithTrx / q.totalStores) * 100} thresholds={CONFIG.THRESHOLDS.storePenetration} />
+                        <RateBadge value={(q.storesWithTrx / CONFIG.TOTAL_STORES) * 100} thresholds={CONFIG.THRESHOLDS.storePenetration} />
                       </td>
                     ))}
                   </tr>
@@ -582,11 +590,10 @@ export default function FRTDashboard() {
                   </tr>
                   <tr className="border-t border-white/5 hover:bg-white/5">
                     <td className="p-2 sticky left-0 bg-slate-900/90 backdrop-blur text-slate-300"># Stores</td>
-                    <td className="p-2 text-center font-semibold text-white bg-cyan-500/5">{latestMonth?.totalStores || '-'}</td>
+                    <td className="p-2 text-center font-semibold text-white bg-cyan-500/5">{CONFIG.TOTAL_STORES}</td>
                     {monthlyData.map((m, idx) => (
                       <td key={m.month} className="p-2 text-center text-slate-300">
-                        {m.totalStores}
-                        <TrendIcon current={m.totalStores} previous={monthlyData[idx-1]?.totalStores} className="inline ml-0.5" />
+                        {CONFIG.TOTAL_STORES}
                       </td>
                     ))}
                   </tr>
@@ -622,7 +629,7 @@ export default function FRTDashboard() {
                     <td className="p-2 text-center bg-cyan-500/5">-</td>
                     {monthlyData.map(m => (
                       <td key={m.month} className="p-2 text-center">
-                        <RateBadge value={(m.storesWithTrx / m.totalStores) * 100} thresholds={CONFIG.THRESHOLDS.storePenetration} />
+                        <RateBadge value={(m.storesWithTrx / CONFIG.TOTAL_STORES) * 100} thresholds={CONFIG.THRESHOLDS.storePenetration} />
                       </td>
                     ))}
                   </tr>
