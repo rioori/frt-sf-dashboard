@@ -96,10 +96,11 @@ const SortIcon = ({ field, sortConfig }) => {
 // DATA FETCHING
 // ============================================================================
 async function fetchMonthlyData() {
-  // Fetch all raw data
+  // Fetch all raw data - increase limit to get all rows (default is 1000)
   const { data, error } = await supabase
     .from(CONFIG.TABLE_NAME)
-    .select('application_month, dealer_code, net_incoming, approved, trx_settled, gmv');
+    .select('application_month, dealer_code, net_incoming, approved, trx_settled, gmv')
+    .limit(10000); // Increase limit to fetch all data
   
   if (error) throw error;
   
@@ -175,6 +176,7 @@ async function fetchStoreData() {
   const { data, error } = await supabase
     .from(CONFIG.TABLE_NAME)
     .select('dealer_code, submerchant')
+    .limit(10000) // Increase limit to fetch all data
     .order('dealer_code');
   
   if (error) throw error;
